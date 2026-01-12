@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import random
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from flask import Flask, Response, jsonify, request
 
 from .game import DEFAULT_FLEET, Game, parse_coordinate
+from .pipe_registry import register_pipe
 
 
 _games: Dict[str, Game] = {}
@@ -744,6 +746,7 @@ INDEX_HTML = """<!doctype html>
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    register_pipe("navalbattle", os.environ.get("PIPEVIEWER_URL", "http://localhost:5000"))
 
     @app.get("/")
     def index():

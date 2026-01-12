@@ -78,3 +78,16 @@ Aucune base SQL n’est requise pour ce serveur : l’état des parties est con
 
 ## Client JavaFX
 Le client JavaFX reste à développer. Il peut consommer l’API REST exposée par le serveur Flask (création de partie, tir). Reportez-vous au cahier des charges pour les règles et extensions possibles.
+
+## Pipe string (JavaFX WebView)
+Ce serveur enregistre automatiquement un pipe string `navalbattle` dans le registre local attendu par le viewer JavaFX. Au démarrage de l’application Flask, le registre `~/.pipeviewer/registry.json` est créé ou mis à jour avec l’entrée suivante :
+
+```json
+{
+  "pipes": {
+    "navalbattle": "http://localhost:5000"
+  }
+}
+```
+
+Vous pouvez surcharger l’URL enregistrée via la variable d’environnement `PIPEVIEWER_URL` (ex. `http://localhost:8912`).
