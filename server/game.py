@@ -53,10 +53,15 @@ class Board:
         self._add_ship(ship)
 
     def to_public_view(self, reveal_ships: bool = False) -> Dict[str, object]:
+        sunk_coords: Set[Coordinate] = set()
+        for ship in self.ships:
+            if ship.is_sunk:
+                sunk_coords.update(ship.coordinates)
         payload: Dict[str, object] = {
             "size": self.size,
             "hits": [format_coordinate(c) for c in sorted(self.hits)],
             "misses": [format_coordinate(c) for c in sorted(self.misses)],
+            "sunk": [format_coordinate(c) for c in sorted(sunk_coords)],
         }
         if reveal_ships:
             payload["ships"] = [
@@ -171,6 +176,7 @@ class Game:
     status: str = "in_progress"  # in_progress | won | lost | draw
     player_shots: Set[Coordinate] = field(default_factory=set)
     bot_shots: Set[Coordinate] = field(default_factory=set)
+    bot_targets: List[Coordinate] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -218,6 +224,7 @@ class Game:
             self.bot_shots_remaining -= 1
             self.bot_shots.add(bot_coord)
             bot_result = ShotResult(feedback=bot_feedback, coordinate=bot_coord, sunk=bot_sunk_name)
+            self._update_bot_targets(bot_coord, bot_feedback, rng)
             if self.player_board.all_sunk:
                 self.status = "lost"
         
@@ -227,6 +234,11 @@ class Game:
         return {"player": player_result, "bot": bot_result}
 
     def _pick_bot_coordinate(self, rng: random.Random) -> Coordinate:
+        while self.bot_targets:
+            candidate = self.bot_targets.pop(0)
+            if candidate not in self.bot_shots:
+                return candidate
+
         available: List[Coordinate] = []
         for row in range(self.player_board.size):
             for col in range(self.player_board.size):
@@ -236,6 +248,26 @@ class Game:
         if not available:
             raise RuntimeError("Bot has no valid coordinates left")
         return rng.choice(available)
+
+    def _update_bot_targets(self, coord: Coordinate, feedback: str, rng: random.Random) -> None:
+        if feedback == "touché-coulé":
+            self.bot_targets.clear()
+            return
+        if feedback != "touché":
+            return
+
+        row, col = coord
+        candidates = [
+            (row - 1, col),
+            (row + 1, col),
+            (row, col - 1),
+            (row, col + 1),
+        ]
+        rng.shuffle(candidates)
+        for candidate in candidates:
+            if self.player_board._is_within_board(candidate) and candidate not in self.bot_shots:
+                if candidate not in self.bot_targets:
+                    self.bot_targets.append(candidate)
 
     def to_public_dict(self) -> Dict[str, object]:
         return {
