@@ -19,6 +19,10 @@ Ce dépôt contient le cahier des charges et une première implémentation serve
    python -m server.app
    # ou FLASK_APP=server.app flask run
    ```
+3. Ouvrez le client visuel :
+   ```bash
+   http://localhost:5000/
+   ```
 
 ## Jouer via l’API REST
 
