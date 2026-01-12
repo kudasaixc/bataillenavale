@@ -217,6 +217,10 @@ class Game:
             self.status = "won"
             return {"player": player_result, "bot": None}
 
+        if self.player_shots_remaining == 0:
+            self.status = "draw"
+            return {"player": player_result, "bot": None}
+
         bot_result: Optional[ShotResult] = None
         if self.bot_shots_remaining > 0:
             bot_coord = self._pick_bot_coordinate(rng)
@@ -227,8 +231,8 @@ class Game:
             self._update_bot_targets(bot_coord, bot_feedback, rng)
             if self.player_board.all_sunk:
                 self.status = "lost"
-        
-        if self.status == "in_progress" and self.player_shots_remaining == 0 and self.bot_shots_remaining == 0:
+
+        if self.status == "in_progress" and self.bot_shots_remaining == 0:
             self.status = "draw"
 
         return {"player": player_result, "bot": bot_result}
