@@ -109,8 +109,8 @@ INDEX_HTML = """<!doctype html>
       border-color: #89b4f8;
     }
     .cell.hit {
-      background: #ef476f;
-      border-color: #c0392b;
+      background: #f6a5b5;
+      border-color: #d46a7a;
       color: #ffffff;
       font-weight: 700;
     }
@@ -121,10 +121,65 @@ INDEX_HTML = """<!doctype html>
       font-weight: 700;
     }
     .cell.sunk {
-      background: #7f1d1d;
-      border-color: #4c0519;
+      background: #c1121f;
+      border-color: #780000;
       color: #ffffff;
       font-weight: 700;
+    }
+    .victory-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.75);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+      z-index: 10;
+    }
+    .victory-card {
+      background: #ffffff;
+      color: #1c2333;
+      padding: 28px 36px;
+      border-radius: 16px;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+      text-align: center;
+      transform: translateY(20px) scale(0.96);
+      opacity: 0;
+    }
+    body.game-over .victory-overlay {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    body.game-over .victory-card {
+      animation: victory-pop 0.6s ease forwards;
+    }
+    .victory-card.victory {
+      border: 2px solid #22c55e;
+      box-shadow: 0 20px 40px rgba(34, 197, 94, 0.35);
+    }
+    .victory-card.defeat {
+      border: 2px solid #ef4444;
+      box-shadow: 0 20px 40px rgba(239, 68, 68, 0.35);
+    }
+    .victory-card.draw {
+      border: 2px solid #f59e0b;
+      box-shadow: 0 20px 40px rgba(245, 158, 11, 0.35);
+    }
+    @keyframes victory-pop {
+      0% {
+        transform: translateY(20px) scale(0.96);
+        opacity: 0;
+      }
+      70% {
+        transform: translateY(-4px) scale(1.02);
+        opacity: 1;
+      }
+      100% {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+      }
     }
     .log {
       font-size: 14px;
@@ -164,9 +219,16 @@ INDEX_HTML = """<!doctype html>
       </div>
     </section>
   </main>
+  <div id="victory-overlay" class="victory-overlay" aria-live="polite">
+    <div id="victory-card" class="victory-card">
+      <h2 id="victory-title">Victoire !</h2>
+      <p id="victory-message">La flotte ennemie est coulée.</p>
+    </div>
+  </div>
 
   <script>
     const columnLabels = "ABCDEFGHIJ";
+    const HIT_DELAY_MS = 500;
     const state = {
       gameId: null,
       status: "idle",
@@ -176,6 +238,8 @@ INDEX_HTML = """<!doctype html>
       botBoard: null,
       lastPlayerResult: null,
       lastBotResult: null,
+      resolving: false,
+      pendingTimeout: null,
     };
 
     function coordinateLabel(row, col) {
@@ -195,7 +259,7 @@ INDEX_HTML = """<!doctype html>
       const hits = new Set(board.hits || []);
       const misses = new Set(board.misses || []);
       const ships = new Set();
-      const sunk = new Set();
+      const sunk = new Set(board.sunk || []);
       if (board.ships) {
         board.ships.forEach((ship) => {
           ship.coordinates.forEach((coord) => ships.add(coord));
@@ -250,7 +314,12 @@ INDEX_HTML = """<!doctype html>
               }
               fireAt(coord);
             });
-            if (hits.has(coord) || misses.has(coord) || state.status !== "in_progress") {
+            if (
+              hits.has(coord) ||
+              misses.has(coord) ||
+              state.status !== "in_progress" ||
+              state.resolving
+            ) {
               button.disabled = true;
             }
           } else {
@@ -266,6 +335,10 @@ INDEX_HTML = """<!doctype html>
       const statusEl = document.getElementById("game-status");
       const shotsEl = document.getElementById("shots-remaining");
       const exchangeEl = document.getElementById("last-exchange");
+      const victoryOverlay = document.getElementById("victory-overlay");
+      const victoryCard = document.getElementById("victory-card");
+      const victoryTitle = document.getElementById("victory-title");
+      const victoryMessage = document.getElementById("victory-message");
 
       statusEl.textContent = state.gameId
         ? `Partie ${state.status.replace("_", " ")} (ID ${state.gameId})`
@@ -286,6 +359,28 @@ INDEX_HTML = """<!doctype html>
       } else {
         exchangeEl.textContent = "—";
       }
+
+      if (state.status === "won" || state.status === "lost" || state.status === "draw") {
+        document.body.classList.add("game-over");
+        victoryCard.classList.remove("victory", "defeat", "draw");
+        if (state.status === "won") {
+          victoryTitle.textContent = "Victoire !";
+          victoryMessage.textContent = "La flotte ennemie est coulée.";
+          victoryCard.classList.add("victory");
+        } else if (state.status === "lost") {
+          victoryTitle.textContent = "Défaite…";
+          victoryMessage.textContent = "Le bot a eu raison de votre flotte.";
+          victoryCard.classList.add("defeat");
+        } else {
+          victoryTitle.textContent = "Match nul";
+          victoryMessage.textContent = "Plus de munitions pour les deux camps.";
+          victoryCard.classList.add("draw");
+        }
+        victoryOverlay.setAttribute("aria-hidden", "false");
+      } else {
+        document.body.classList.remove("game-over");
+        victoryOverlay.setAttribute("aria-hidden", "true");
+      }
     }
 
     function updateBoards() {
@@ -295,6 +390,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function createGame() {
+      if (state.pendingTimeout) {
+        clearTimeout(state.pendingTimeout);
+        state.pendingTimeout = null;
+      }
       const response = await fetch("/games", { method: "POST" });
       if (!response.ok) {
         alert("Impossible de créer la partie.");
@@ -309,13 +408,22 @@ INDEX_HTML = """<!doctype html>
       state.botBoard = data.bot_board;
       state.lastPlayerResult = null;
       state.lastBotResult = null;
+      state.resolving = false;
       updateBoards();
     }
 
     async function fireAt(coord) {
-      if (!state.gameId || state.status !== "in_progress") {
+      if (!state.gameId || state.status !== "in_progress" || state.resolving) {
         return;
       }
+      if (state.pendingTimeout) {
+        clearTimeout(state.pendingTimeout);
+        state.pendingTimeout = null;
+      }
+      state.resolving = true;
+      updateBoards();
+      const previousPlayerBoard = state.playerBoard;
+      const previousBotShotsRemaining = state.botShotsRemaining;
       const response = await fetch(`/games/${state.gameId}/shots`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -324,17 +432,39 @@ INDEX_HTML = """<!doctype html>
       if (!response.ok) {
         const error = await response.json();
         alert(error.error || "Coup invalide");
+        state.resolving = false;
+        updateBoards();
         return;
       }
       const data = await response.json();
-      state.status = data.status;
       state.playerShotsRemaining = data.player_shots_remaining;
-      state.botShotsRemaining = data.bot_shots_remaining;
-      state.playerBoard = data.player_board;
       state.botBoard = data.bot_board;
       state.lastPlayerResult = data.player_result;
-      state.lastBotResult = data.bot_result;
-      updateBoards();
+      const hasBotShot = Boolean(data.bot_result);
+
+      if (hasBotShot) {
+        state.status = "in_progress";
+        state.botShotsRemaining = previousBotShotsRemaining;
+        state.playerBoard = previousPlayerBoard;
+        state.lastBotResult = null;
+        updateBoards();
+        state.pendingTimeout = window.setTimeout(() => {
+          state.status = data.status;
+          state.botShotsRemaining = data.bot_shots_remaining;
+          state.playerBoard = data.player_board;
+          state.lastBotResult = data.bot_result;
+          state.resolving = false;
+          state.pendingTimeout = null;
+          updateBoards();
+        }, HIT_DELAY_MS);
+      } else {
+        state.status = data.status;
+        state.botShotsRemaining = data.bot_shots_remaining;
+        state.playerBoard = data.player_board;
+        state.lastBotResult = data.bot_result;
+        state.resolving = false;
+        updateBoards();
+      }
     }
 
     document.getElementById("new-game").addEventListener("click", createGame);
