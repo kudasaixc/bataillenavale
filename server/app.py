@@ -126,6 +126,53 @@ INDEX_HTML = """<!doctype html>
       color: #ffffff;
       font-weight: 700;
     }
+    .placement-card {
+      display: grid;
+      gap: 12px;
+    }
+    .placement-controls,
+    .placement-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .placement-card button {
+      background: #1d4ed8;
+      color: #ffffff;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .placement-card button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    #reset-placement {
+      background: #64748b;
+    }
+    #start-game {
+      background: #16a34a;
+    }
+    .fleet-progress {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: #475569;
+    }
+    .fleet-progress li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .fleet-progress .placed {
+      color: #16a34a;
+      font-weight: 600;
+    }
     .victory-overlay {
       position: fixed;
       inset: 0;
@@ -207,6 +254,18 @@ INDEX_HTML = """<!doctype html>
         <strong>Dernier échange</strong>
         <p class="log" id="last-exchange">—</p>
       </div>
+      <div class="card placement-card">
+        <strong>Placement de la flotte</strong>
+        <p class="log" id="placement-status">Sélectionnez une case pour placer le navire.</p>
+        <div class="placement-controls">
+          <button id="orientation-toggle" type="button">Orientation : horizontale</button>
+          <button id="reset-placement" type="button">Réinitialiser</button>
+        </div>
+        <div class="placement-actions">
+          <button id="start-game" type="button" disabled>Démarrer la partie</button>
+        </div>
+        <ul id="fleet-progress" class="fleet-progress"></ul>
+      </div>
     </section>
     <section class="boards">
       <div class="card">
@@ -240,7 +299,18 @@ INDEX_HTML = """<!doctype html>
       lastBotResult: null,
       resolving: false,
       pendingTimeout: null,
+      placementMode: true,
+      placementOrientation: "horizontal",
+      placements: [],
     };
+    const fleet = [
+      { name: "Porte-avion", length: 5 },
+      { name: "Croiseur", length: 4 },
+      { name: "Contretorpilleur", length: 3 },
+      { name: "Contretorpilleur", length: 3 },
+      { name: "Torpilleur", length: 2 },
+    ];
+    const boardSize = 10;
 
     function coordinateLabel(row, col) {
       return `${columnLabels[col]}${row + 1}`;
@@ -307,21 +377,26 @@ INDEX_HTML = """<!doctype html>
             button.textContent = "☠";
           }
 
-          if (options.clickable) {
+          if (options.onCellClick) {
+            button.addEventListener("click", () => {
+              if (button.disabled) {
+                return;
+              }
+              options.onCellClick(coord);
+            });
+            button.disabled = options.isDisabled ? options.isDisabled(coord) : false;
+          } else if (options.clickable) {
             button.addEventListener("click", () => {
               if (button.disabled) {
                 return;
               }
               fireAt(coord);
             });
-            if (
+            button.disabled =
               hits.has(coord) ||
               misses.has(coord) ||
               state.status !== "in_progress" ||
-              state.resolving
-            ) {
-              button.disabled = true;
-            }
+              state.resolving;
           } else {
             button.disabled = true;
           }
@@ -335,20 +410,26 @@ INDEX_HTML = """<!doctype html>
       const statusEl = document.getElementById("game-status");
       const shotsEl = document.getElementById("shots-remaining");
       const exchangeEl = document.getElementById("last-exchange");
+      const placementStatus = document.getElementById("placement-status");
       const victoryOverlay = document.getElementById("victory-overlay");
       const victoryCard = document.getElementById("victory-card");
       const victoryTitle = document.getElementById("victory-title");
       const victoryMessage = document.getElementById("victory-message");
 
-      statusEl.textContent = state.gameId
-        ? `Partie ${state.status.replace("_", " ")} (ID ${state.gameId})`
-        : "En attente…";
+      if (state.placementMode) {
+        statusEl.textContent = "Placement de votre flotte";
+      } else {
+        statusEl.textContent = state.gameId
+          ? `Partie ${state.status.replace("_", " ")} (ID ${state.gameId})`
+          : "En attente…";
+      }
 
-      shotsEl.textContent = state.gameId
-        ? `Vous: ${state.playerShotsRemaining} | Bot: ${state.botShotsRemaining}`
-        : "—";
+      shotsEl.textContent =
+        state.gameId && !state.placementMode
+          ? `Vous: ${state.playerShotsRemaining} | Bot: ${state.botShotsRemaining}`
+          : "—";
 
-      if (state.lastPlayerResult || state.lastBotResult) {
+      if (!state.placementMode && (state.lastPlayerResult || state.lastBotResult)) {
         const player = state.lastPlayerResult
           ? `Vous: ${state.lastPlayerResult.coordinate} (${state.lastPlayerResult.feedback})`
           : "Vous: —";
@@ -358,6 +439,15 @@ INDEX_HTML = """<!doctype html>
         exchangeEl.textContent = `${player} | ${bot}`;
       } else {
         exchangeEl.textContent = "—";
+      }
+
+      if (state.placementMode) {
+        const nextShip = fleet[state.placements.length];
+        placementStatus.textContent = nextShip
+          ? `À placer : ${nextShip.name} (${nextShip.length} cases)`
+          : "Flotte prête. Vous pouvez démarrer la partie.";
+      } else {
+        placementStatus.textContent = "Partie en cours.";
       }
 
       if (state.status === "won" || state.status === "lost" || state.status === "draw") {
@@ -384,9 +474,170 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateBoards() {
-      renderBoard(document.getElementById("player-grid"), state.playerBoard);
-      renderBoard(document.getElementById("bot-grid"), state.botBoard, { clickable: true });
+      if (state.placementMode) {
+        renderBoard(document.getElementById("player-grid"), buildPlacementBoard(), {
+          onCellClick: handlePlacementClick,
+          isDisabled: () => false,
+        });
+        renderBoard(document.getElementById("bot-grid"), buildEmptyBoard());
+      } else {
+        renderBoard(document.getElementById("player-grid"), state.playerBoard);
+        renderBoard(document.getElementById("bot-grid"), state.botBoard, { clickable: true });
+      }
       updateStatus();
+      updatePlacementControls();
+    }
+
+    function buildEmptyBoard() {
+      return { size: boardSize, hits: [], misses: [], sunk: [], ships: [] };
+    }
+
+    function buildPlacementBoard() {
+      return {
+        size: boardSize,
+        hits: [],
+        misses: [],
+        sunk: [],
+        ships: state.placements.map((ship) => ({
+          name: ship.name,
+          length: ship.length,
+          coordinates: ship.positions,
+          hits: [],
+          sunk: false,
+        })),
+      };
+    }
+
+    function updatePlacementControls() {
+      const startButton = document.getElementById("start-game");
+      const orientationButton = document.getElementById("orientation-toggle");
+      const resetButton = document.getElementById("reset-placement");
+      const fleetProgress = document.getElementById("fleet-progress");
+      const isReady = state.placements.length === fleet.length;
+
+      startButton.disabled = !state.placementMode || !isReady || state.resolving;
+      orientationButton.disabled = !state.placementMode;
+      resetButton.disabled = !state.placementMode;
+      orientationButton.textContent =
+        state.placementOrientation === "horizontal"
+          ? "Orientation : horizontale"
+          : "Orientation : verticale";
+
+      fleetProgress.innerHTML = "";
+      fleet.forEach((ship, index) => {
+        const listItem = document.createElement("li");
+        const label = document.createElement("span");
+        label.textContent = `${ship.name} (${ship.length})`;
+        const status = document.createElement("span");
+        status.textContent = state.placements[index] ? "placé" : "à placer";
+        if (state.placements[index]) {
+          status.classList.add("placed");
+        }
+        listItem.appendChild(label);
+        listItem.appendChild(status);
+        fleetProgress.appendChild(listItem);
+      });
+    }
+
+    function resetPlacement() {
+      state.gameId = null;
+      state.status = "idle";
+      state.playerShotsRemaining = 0;
+      state.botShotsRemaining = 0;
+      state.playerBoard = null;
+      state.botBoard = null;
+      state.lastPlayerResult = null;
+      state.lastBotResult = null;
+      state.resolving = false;
+      state.placementMode = true;
+      state.placementOrientation = "horizontal";
+      state.placements = [];
+      updateBoards();
+    }
+
+    function handlePlacementClick(coord) {
+      if (!state.placementMode) {
+        return;
+      }
+      const nextShip = fleet[state.placements.length];
+      if (!nextShip) {
+        return;
+      }
+      const positions = computeShipPositions(coord, nextShip.length, state.placementOrientation);
+      if (!positions) {
+        alert("Le navire dépasse la grille.");
+        return;
+      }
+      if (!isPlacementValid(positions)) {
+        alert("Le navire chevauche ou touche un autre navire.");
+        return;
+      }
+      state.placements.push({
+        name: nextShip.name,
+        length: nextShip.length,
+        positions: positions.map(([row, col]) => coordinateLabel(row, col)),
+      });
+      updateBoards();
+    }
+
+    function computeShipPositions(coord, length, orientation) {
+      const start = parseCoordinate(coord);
+      if (!start) {
+        return null;
+      }
+      const [row, col] = start;
+      const positions = [];
+      for (let step = 0; step < length; step++) {
+        const nextRow = row + (orientation === "vertical" ? step : 0);
+        const nextCol = col + (orientation === "horizontal" ? step : 0);
+        if (nextRow < 0 || nextRow >= boardSize || nextCol < 0 || nextCol >= boardSize) {
+          return null;
+        }
+        positions.push([nextRow, nextCol]);
+      }
+      return positions;
+    }
+
+    function parseCoordinate(coord) {
+      const column = coord[0];
+      const row = Number.parseInt(coord.slice(1), 10) - 1;
+      const col = columnLabels.indexOf(column);
+      if (Number.isNaN(row) || col < 0) {
+        return null;
+      }
+      return [row, col];
+    }
+
+    function isPlacementValid(positions) {
+      const existing = new Set();
+      state.placements.forEach((ship) => {
+        ship.positions.forEach((pos) => existing.add(pos));
+      });
+      for (const [row, col] of positions) {
+        const label = coordinateLabel(row, col);
+        if (existing.has(label)) {
+          return false;
+        }
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const neighborRow = row + dr;
+            const neighborCol = col + dc;
+            if (
+              neighborRow < 0 ||
+              neighborRow >= boardSize ||
+              neighborCol < 0 ||
+              neighborCol >= boardSize
+            ) {
+              continue;
+            }
+            const neighborLabel = coordinateLabel(neighborRow, neighborCol);
+            if (existing.has(neighborLabel)) {
+              return false;
+            }
+          }
+        }
+      }
+      return true;
     }
 
     async function createGame() {
@@ -394,7 +645,15 @@ INDEX_HTML = """<!doctype html>
         clearTimeout(state.pendingTimeout);
         state.pendingTimeout = null;
       }
-      const response = await fetch("/games", { method: "POST" });
+      if (state.placements.length !== fleet.length) {
+        alert("Placez toute votre flotte avant de démarrer.");
+        return;
+      }
+      const response = await fetch("/games", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_ships: state.placements }),
+      });
       if (!response.ok) {
         alert("Impossible de créer la partie.");
         return;
@@ -409,6 +668,7 @@ INDEX_HTML = """<!doctype html>
       state.lastPlayerResult = null;
       state.lastBotResult = null;
       state.resolving = false;
+      state.placementMode = false;
       updateBoards();
     }
 
@@ -467,8 +727,15 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    document.getElementById("new-game").addEventListener("click", createGame);
-    createGame();
+    document.getElementById("new-game").addEventListener("click", resetPlacement);
+    document.getElementById("orientation-toggle").addEventListener("click", () => {
+      state.placementOrientation =
+        state.placementOrientation === "horizontal" ? "vertical" : "horizontal";
+      updatePlacementControls();
+    });
+    document.getElementById("reset-placement").addEventListener("click", resetPlacement);
+    document.getElementById("start-game").addEventListener("click", createGame);
+    resetPlacement();
   </script>
 </body>
 </html>
